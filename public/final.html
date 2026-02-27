@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Final Verification</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Outfit:wght@700;800&display=swap"
+        rel="stylesheet">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.2/anime.min.js"></script>
+    <link rel="stylesheet" href="shared.css">
+    <style>
+        :root {
+            --title-size: 1.8rem;
+        }
+
+        .destination-btn {
+            background: linear-gradient(135deg, var(--primary-neon), var(--secondary-neon));
+            color: #000;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 0 30px rgba(255, 107, 107, 0.4);
+        }
+
+        .destination-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 40px rgba(255, 107, 107, 0.6);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div class="particles" id="particles"></div>
+
+        <div class="step-badge">Final Step</div>
+        <div class="ui-overlay">
+            <h1>🎯 <span>Final Strike</span></h1>
+            <p>One last precision hit to reveal your link</p>
+            <div class="instructions" id="instructions">
+                🎯 Drag to aim and release to throw!
+            </div>
+        </div>
+
+        <div class="power-meter">
+            <div class="power-fill" id="powerFill"></div>
+        </div>
+
+        <div class="message" id="message"></div>
+
+        <div class="wait-overlay hidden" id="waitOverlay">
+            <h2>⏳ Almost there!</h2>
+            <p>Please wait a moment...</p>
+            <div class="countdown" id="countdown">5</div>
+        </div>
+
+        <div class="success-overlay" id="successOverlay">
+            <h2 id="overlayTitle">✓ Verified!</h2>
+            <p id="overlayMessage">Your link is ready.</p>
+            <div class="loader" id="overlayLoader" style="display:none; margin-bottom: 20px;"></div>
+            <a id="destinationBtn" href="#" class="destination-btn">Go to Destination →</a>
+        </div>
+    </div>
+
+    <script src="engine.wasm.js"></script>
+    <script src="engine.core.js"></script>
+    <script src="shared.js"></script>
+    <script>
+        window.CHALLENGE_CONTEXT = window.CHALLENGE_CONTEXT || {};
+        let linkId = null;
+
+        async function init() {
+            const urlParams = new URLSearchParams(window.location.search);
+            linkId = urlParams.get('id');
+
+            if (!linkId) {
+                document.body.innerHTML = '<div style="color:white;text-align:center;padding:50px;"><h2>Invalid Link</h2><p>Please use a valid verification link.</p></div>';
+                return;
+            }
+
+            loadGData();
+
+            initEngine();
+            if (window.CHALLENGE_CONTEXT && window.CHALLENGE_CONTEXT.n) {
+                window.isGameReady = true;
+            }
+
+            if (!challengeId) {
+                await initChallenge();
+            }
+        }
+
+        async function initChallenge() {
+            try {
+                const response = await fetch('/api/basketball/init', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ linkId })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    challengeId = data.cid;
+                    target = { xRatio: data.hx, yRatio: data.hy, tid: data.tid };
+
+                    if (data.g) SHARED_CONFIG.GRAVITY = data.g;
+                    if (data.p) SHARED_CONFIG.MAX_POWER = 22 * data.p;
+                    if (data.n) window.CHALLENGE_CONTEXT.n = data.n;
+
+                    updateTargetPosition();
+                    window.isGameReady = true;
+                }
+            } catch (err) {
+            }
+        }
+
+        window.validateShot = async function (angle, power, dragDuration) {
+            try {
+                const rawPayload = {
+                    angle, power, dragDuration, dragPath,
+                    screenWidth: canvas.width, screenHeight: canvas.height,
+                    linkId
+                };
+                const nonce = (window.CHALLENGE_CONTEXT && window.CHALLENGE_CONTEXT.n) || null;
+                const packed = window._CORE_ENGINE && window._CORE_ENGINE.pack ?
+                    window._CORE_ENGINE.pack(rawPayload, linkId, nonce) :
+                    null;
+
+                const requestBody = {
+                    challengeId,
+                    linkId,
+                    v: packed
+                };
+                if (!packed) Object.assign(requestBody, rawPayload);
+
+                const response = await fetch('/api/step2/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+                if (response.ok && data.destination) {
+                    hasScored = true;
+                    window.isVerified = true;
+                    showSuccess(data.destination);
+                } else if (response.status === 403) {
+                    showBlockOverlay(data.error);
+                } else if (response.status === 425) {
+                    showWaitOverlay(data.wait || 5);
+                } else if (data.error !== 'miss') {
+                    showMessage(data.error || 'Try again', '#ff6b6b');
+                    resetDart();
+                }
+            } catch (err) {
+                window.isGameReady = true;
+                showMessage('Connection error', '#ff6b6b');
+                resetDart();
+            }
+        };
+
+        function showWaitOverlay(seconds) {
+            const overlay = document.getElementById('waitOverlay');
+            const countdown = document.getElementById('countdown');
+            overlay.classList.remove('hidden');
+
+            let remaining = seconds;
+            countdown.textContent = remaining;
+            anime({ targets: countdown, scale: [1.5, 1], duration: 300, easing: 'easeOutQuad' });
+
+            const interval = setInterval(() => {
+                remaining--;
+                countdown.textContent = remaining;
+                anime({ targets: countdown, scale: [1.3, 1], duration: 300, easing: 'easeOutQuad' });
+
+                if (remaining <= 0) {
+                    clearInterval(interval);
+                    overlay.classList.add('hidden');
+                    resetDart();
+                    showMessage('Try again!', '#6bff6b');
+                }
+            }, 1000);
+        }
+
+        function showBlockOverlay(message) {
+            const div = document.createElement('div');
+            div.className = 'success-overlay show';
+            div.style.background = 'rgba(0,0,0,0.95)';
+            div.innerHTML = `
+                <h2 style="background: linear-gradient(90deg, #ff6b6b, #ff4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">⚠️ ABNORMAL BEHAVIOR</h2>
+                <p style="color: white; font-size: 1.2rem; margin-top: 20px;">${message}</p>
+                <button onclick="window.location.reload()" style="margin-top: 30px; padding: 12px 30px; border: none; background: linear-gradient(90deg, #ff6b6b, #ff4444); color: white; border-radius: 25px; font-size: 1rem; font-weight: bold; cursor: pointer; box-shadow: 0 0 20px rgba(255, 107, 107, 0.4); text-transform: uppercase; letter-spacing: 1px;">Try Again</button>
+            `;
+            document.body.appendChild(div);
+        }
+
+        window.showVerifying = function () {
+            const overlay = document.getElementById('successOverlay');
+            document.getElementById('overlayTitle').innerText = '⏲ Verifying...';
+            document.getElementById('overlayMessage').innerText = 'Validating your final hit...';
+            document.getElementById('overlayLoader').style.display = 'block';
+            document.getElementById('destinationBtn').style.display = 'none';
+
+            anime({
+                targets: overlay, opacity: 1, duration: 500, easing: 'easeOutQuad',
+                begin: () => overlay.classList.add('show')
+            });
+        };
+
+        function showSuccess(destinationUrl) {
+            const overlay = document.getElementById('successOverlay');
+            if (!overlay.classList.contains('show')) {
+                overlay.classList.add('show');
+                overlay.style.opacity = 1;
+            }
+
+            const btn = document.getElementById('destinationBtn');
+            btn.href = destinationUrl;
+            btn.style.display = 'inline-block';
+
+            document.getElementById('overlayTitle').innerText = '✓ Verified!';
+            document.getElementById('overlayMessage').innerText = 'Your link is ready.';
+            document.getElementById('overlayLoader').style.display = 'none';
+
+            anime({ targets: '.success-overlay h2', scale: [0.5, 1], opacity: [0, 1], duration: 800, easing: 'easeOutElastic(1, .5)' });
+            anime({ targets: '.destination-btn', scale: [0, 1], opacity: [0, 1], duration: 600, delay: 200, easing: 'easeOutBack' });
+        }
+
+        window.resetDart = function () {
+            dart.x = canvas.width * 0.5;
+            dart.y = canvas.height - 80;
+            dart.vx = 0; dart.vy = 0;
+            dartTrail = [];
+            isAnimating = false;
+            hasScored = false;
+            window.isVerified = false;
+            hitDetected = false;
+            minDistToTarget = Infinity;
+            minDistPos = { x: 0, y: 0 };
+            wasInTarget = false;
+            dartRotation = -Math.PI / 2;
+            const inst = document.getElementById('instructions');
+            if (inst) inst.style.opacity = '0.7';
+            window.isGameReady = false;
+            initChallenge();
+        };
+
+        init();
+    </script>
+</body>
+
+</html>

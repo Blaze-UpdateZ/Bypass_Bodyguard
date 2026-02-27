@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Security Verification</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Outfit:wght@700;800&display=swap"
+        rel="stylesheet">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.2/anime.min.js"></script>
+    <link rel="stylesheet" href="shared.css">
+</head>
+
+<body>
+    <div class="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div class="particles" id="particles"></div>
+
+        <div class="step-badge">Initial Step</div>
+        <div class="ui-overlay">
+            <h1>🎯 <span>Target Identified</span></h1>
+            <p>Complete this task to get link</p>
+            <div class="instructions" id="instructions">
+                🎯 Drag to aim and release to throw!
+            </div>
+        </div>
+
+        <div class="power-meter">
+            <div class="power-fill" id="powerFill"></div>
+        </div>
+
+        <div class="message" id="message"></div>
+
+        <div class="success-overlay" id="successOverlay">
+            <h2 id="overlayTitle">✓ Verified!</h2>
+            <p id="overlayMessage">Redirecting you now...</p>
+            <div class="loader" id="overlayLoader"></div>
+        </div>
+    </div>
+
+    <script src="engine.wasm.js"></script>
+    <script src="engine.core.js"></script>
+    <script src="shared.js"></script>
+    <script>
+        window.SESSION_TOKEN = window.SESSION_TOKEN || "";
+        window.CHALLENGE_CONTEXT = window.CHALLENGE_CONTEXT || {};
+
+        async function init() {
+            loadGData();
+
+            initEngine();
+            if (window.CHALLENGE_CONTEXT && window.CHALLENGE_CONTEXT.n) {
+                window.isGameReady = true;
+            }
+
+            if (!challengeId) {
+                await initChallenge();
+            }
+        }
+
+        async function initChallenge() {
+            try {
+                const sessionToken = window.SESSION_TOKEN || null;
+                const response = await fetch('/api/basketball/init', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionToken })
+                });
+
+                if (!response.ok) throw new Error(`Server returned ${response.status}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    challengeId = data.cid;
+                    target = { xRatio: data.hx, yRatio: data.hy, tid: data.tid };
+
+                    if (data.g) SHARED_CONFIG.GRAVITY = data.g;
+                    if (data.p) SHARED_CONFIG.MAX_POWER = 22 * data.p;
+                    if (data.n) window.CHALLENGE_CONTEXT.n = data.n;
+
+                    updateTargetPosition();
+                    window.isGameReady = true;
+                } else {
+                    throw new Error(data.error || 'Failed to initialize challenge');
+                }
+            } catch (err) {
+                target = null;
+                setTimeout(initChallenge, 3000);
+            }
+        }
+
+        window.validateShot = async function (angle, power, dragDuration) {
+            try {
+                const rawPayload = {
+                    angle, power, dragDuration, dragPath,
+                    screenWidth: canvas.width, screenHeight: canvas.height
+                };
+                const nonce = (window.CHALLENGE_CONTEXT && window.CHALLENGE_CONTEXT.n) || null;
+                const packed = window._CORE_ENGINE && window._CORE_ENGINE.pack ?
+                    window._CORE_ENGINE.pack(rawPayload, window.SESSION_TOKEN, nonce) :
+                    null;
+
+                const requestBody = {
+                    challengeId,
+                    sessionToken: window.SESSION_TOKEN,
+                    v: packed
+                };
+                if (!packed) Object.assign(requestBody, rawPayload);
+
+                const response = await fetch('/api/basketball/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    hasScored = true;
+                    window.isVerified = true;
+                    showSuccess(data.redirect);
+                } else if (data.error !== 'miss') {
+                    showMessage(data.error || 'Try again', '#ff6b6b');
+                    resetDart();
+                }
+            } catch (err) {
+                window.isGameReady = true;
+                showMessage('Connection error', '#ff6b6b');
+                resetDart();
+            }
+        };
+
+        window.showVerifying = function () {
+            const overlay = document.getElementById('successOverlay');
+            document.getElementById('overlayTitle').innerText = '⏲ Verifying...';
+            document.getElementById('overlayMessage').innerText = 'Securing your session...';
+            document.getElementById('overlayLoader').style.display = 'block';
+
+            anime({
+                targets: overlay, opacity: 1, duration: 500, easing: 'easeOutQuad',
+                begin: () => overlay.classList.add('show')
+            });
+        };
+
+        function showSuccess(redirectUrl) {
+            const overlay = document.getElementById('successOverlay');
+            if (!overlay.classList.contains('show')) {
+                overlay.classList.add('show');
+                overlay.style.opacity = 1;
+            }
+
+            document.getElementById('overlayTitle').innerText = '✓ Verified!';
+            document.getElementById('overlayMessage').innerText = 'Redirecting you now...';
+            document.getElementById('overlayLoader').style.display = 'none';
+
+            anime({
+                targets: '.success-overlay h2', scale: [0.5, 1], opacity: [0, 1],
+                duration: 800, easing: 'easeOutElastic(1, .5)'
+            });
+            setTimeout(() => { window.location.href = redirectUrl; }, 1500);
+        }
+
+        window.resetDart = function () {
+            dart.x = canvas.width * 0.5;
+            dart.y = canvas.height - 80;
+            dart.vx = 0; dart.vy = 0;
+            dartTrail = [];
+            isAnimating = false;
+            hasScored = false;
+            window.isVerified = false;
+            hitDetected = false;
+            minDistToTarget = Infinity;
+            minDistPos = { x: 0, y: 0 };
+            wasInTarget = false;
+            dartRotation = -Math.PI / 2;
+            const inst = document.getElementById('instructions');
+            if (inst) inst.style.opacity = '0.7';
+            window.isGameReady = false;
+            initChallenge();
+        };
+
+        init();
+    </script>
+</body>
+
+</html>
