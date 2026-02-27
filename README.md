@@ -34,7 +34,7 @@ A powerful, high-performance Node.js API designed to secure, manage, and track b
 1.  **Clone the repository**:
 
     ```bash
-    git clone https://github.com/yourusername/bypass-bodyguard.git
+    git clone https://github.com/Blaze-UpdateZ/bypass-bodyguard.git
     cd bypass-bodyguard
     ```
 
@@ -137,3 +137,4 @@ MIT License. See [LICENSE](LICENSE) for more details.
 ---
 
 _Disclaimer: This project is for personal use and educational purposes. Use responsibly._
+
