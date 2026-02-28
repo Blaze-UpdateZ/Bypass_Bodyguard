@@ -130,9 +130,6 @@ Ensure the following variables are set in your environment:
 - **Powered by**: [@Blaze_Updatez](https://t.me/Blaze_Updatez)
 - **Created by**: [@Bharath_boy](https://t.me/Bharath_boy)
 
-## ⚖️ License
-
-MIT License. See [LICENSE](LICENSE) for more details.
 
 ---
 
